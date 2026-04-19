@@ -1,418 +1,565 @@
 'use client';
-import { useState, useRef, useCallback } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
-import {
-  Search, Trash2, Plus, Minus, ShoppingCart, User, X, CreditCard, Banknote, Smartphone, ChevronRight, Receipt, AlertCircle,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Modal } from '@/components/ui/modal';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { Product, CartItem } from '@/types';
 import { useCartStore } from '@/store/cart';
-import { formatCurrency } from '@/lib/utils';
-import { Product, Member } from '@/types';
+import { useParkedBillsStore, ParkedBill } from '@/store/parked-bills';
+import { useAuthStore } from '@/store/auth';
+import { formatCurrency, generateInvoiceNo } from '@/lib/utils';
+import { MemberSearchModal } from './_components/MemberSearchModal';
+import { EditMemberModal } from './_components/EditMemberModal';
+import { ParkedBillsModal } from './_components/ParkedBillsModal';
+import { PaymentModal } from './_components/PaymentModal';
 
 export default function POSPage() {
-  const qc = useQueryClient();
-  const [productSearch, setProductSearch] = useState('');
-  const [memberSearch, setMemberSearch] = useState('');
-  const [showMemberModal, setShowMemberModal] = useState(false);
-  const [showPayModal, setShowPayModal] = useState(false);
-  const [cashInput, setCashInput] = useState('');
-  const [payMethod, setPayMethod] = useState<'cash' | 'transfer' | 'credit'>('cash');
-  const [receiptData, setReceiptData] = useState<{ invoiceNo: string; finalAmount: number; change: number; memberName: string } | null>(null);
+  const router = useRouter();
+  const { username, logout } = useAuthStore();
+  const {
+    items, member, discount, notes,
+    addItem, removeItem, updateQuantity,
+    setMember, setDiscount, clearCart, subtotal, finalAmount,
+  } = useCartStore();
+  const parkedStore = useParkedBillsStore();
+
+  const [billNo, setBillNo] = useState(() => generateInvoiceNo());
+  const [recalledBillId, setRecalledBillId] = useState<string | null>(null);
+  const [now, setNow] = useState(new Date());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+
+  const [modalMember, setModalMember] = useState(false);
+  const [modalEdit, setModalEdit] = useState(false);
+  const [modalParked, setModalParked] = useState(false);
+  const [modalPay, setModalPay] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
+
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const { items, member, discount, addItem, removeItem, updateQuantity, updateItemDiscount, setMember, setDiscount, setNotes, notes, clearCart, subtotal, finalAmount } = useCartStore();
+  // Clock tick
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
-  const { data: products = [], isLoading: loadingProducts } = useQuery<Product[]>({
-    queryKey: ['products', productSearch],
-    queryFn: () => fetch(`/api/products?search=${encodeURIComponent(productSearch)}`).then((r) => r.json()),
-    enabled: productSearch.length > 0,
-  });
+  // Toast auto-hide
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
-  const { data: members = [] } = useQuery<Member[]>({
-    queryKey: ['members', memberSearch],
-    queryFn: () => fetch(`/api/members?search=${encodeURIComponent(memberSearch)}`).then((r) => r.json()),
-    enabled: memberSearch.length > 0,
-  });
+  const showToast = (msg: string, type: 'ok' | 'err' = 'ok') => setToast({ msg, type });
 
-  const createSale = useMutation({
-    mutationFn: (data: object) => fetch('/api/sales', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => r.json()),
-    onSuccess: (data) => {
-      if (data.error) { toast.error(data.error); return; }
-      setReceiptData({ invoiceNo: data.invoiceNo, finalAmount: data.finalAmount, change: data.change, memberName: data.memberName });
-      clearCart();
-      setCashInput('');
-      setShowPayModal(false);
-      qc.invalidateQueries({ queryKey: ['products'] });
-      qc.invalidateQueries({ queryKey: ['reports-summary'] });
-      toast.success(`ขายสำเร็จ บิล ${data.invoiceNo}`);
-    },
-    onError: () => toast.error('เกิดข้อผิดพลาด'),
-  });
+  // Product search
+  useEffect(() => {
+    if (!searchQuery.trim()) { setProducts([]); return; }
+    const t = setTimeout(async () => {
+      setLoadingSearch(true);
+      try {
+        const r = await fetch(`/api/products?search=${encodeURIComponent(searchQuery)}`);
+        const d = await r.json();
+        setProducts(Array.isArray(d) ? d : []);
+      } finally {
+        setLoadingSearch(false);
+      }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
   const handleAddProduct = useCallback((p: Product) => {
-    if (p.stock <= 0) { toast.warning('สินค้าหมดสต็อก'); return; }
-    if (p.requirePrescription) toast.warning('สินค้านี้ต้องใช้ใบสั่งยา');
-    addItem({ productId: p.id, productName: p.name, barcode: p.barcode, price: p.price, quantity: 1, discount: 0, totalPrice: p.price, stock: p.stock, requirePrescription: p.requirePrescription });
-    setProductSearch('');
+    if (Number(p.stock) <= 0) { showToast('สินค้าหมดสต็อก', 'err'); return; }
+    const cartItem: CartItem = {
+      productId: p.id,
+      productName: p.name,
+      barcode: p.barcode,
+      price: Number(p.price),
+      quantity: 1,
+      discount: 0,
+      totalPrice: Number(p.price),
+      stock: Number(p.stock),
+      requirePrescription: String(p.requirePrescription) === 'true',
+    };
+    addItem(cartItem);
+    setSearchQuery('');
+    setProducts([]);
     searchRef.current?.focus();
   }, [addItem]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && products.length === 1) handleAddProduct(products[0]);
+    if (e.key === 'Enter') {
+      if (products.length === 1) handleAddProduct(products[0]);
+      else if (products.length > 1) {
+        const exact = products.find((p) => p.barcode === searchQuery.trim());
+        if (exact) handleAddProduct(exact);
+      }
+    }
   };
 
-  const handleCheckout = () => {
-    if (items.length === 0) { toast.warning('กรุณาเพิ่มสินค้า'); return; }
-    setShowPayModal(true);
-  };
-
-  const handleConfirmPay = () => {
-    const cash = payMethod === 'cash' ? parseFloat(cashInput) || 0 : finalAmount();
-    if (payMethod === 'cash' && cash < finalAmount()) { toast.error('รับเงินไม่พอ'); return; }
-    createSale.mutate({
-      items,
-      memberId: member?.id || '',
+  // F4: Park bill
+  const handleParkBill = useCallback(() => {
+    if (items.length === 0) { showToast('ไม่มีรายการในบิล', 'err'); return; }
+    parkedStore.parkBill({
+      member,
+      items: [...items],
       discount,
-      paymentMethod: payMethod,
-      cashReceived: cash,
       notes,
-      pointsUsed: 0,
+      subtotal: subtotal(),
     });
+    clearCart();
+    setBillNo(generateInvoiceNo());
+    setRecalledBillId(null);
+    showToast('พักบิลเรียบร้อย → F5 เพื่อดูรายการ');
+  }, [items, member, discount, notes, subtotal, parkedStore, clearCart]);
+
+  // Recall parked bill
+  const handleRecall = (bill: ParkedBill) => {
+    clearCart();
+    bill.items.forEach((it) => addItem(it));
+    if (bill.member) setMember(bill.member);
+    setDiscount(bill.discount);
+    setBillNo(bill.billNo);
+    setRecalledBillId(bill.id);
+    parkedStore.recallBill(bill.id);
+    showToast('เรียกคืนบิลเรียบร้อย');
   };
 
-  const cashRecv = parseFloat(cashInput) || 0;
-  const change = Math.max(0, cashRecv - finalAmount());
-  const quickAmounts = [20, 50, 100, 500, 1000].filter((a) => a >= finalAmount());
+  // F5
+  const handleOpenParked = useCallback(() => setModalParked(true), []);
+
+  // F2
+  const handleOpenMemberSearch = useCallback(() => setModalMember(true), []);
+
+  // F8: delete selected item
+  const handleDeleteSelected = useCallback(() => {
+    if (selectedItemId) removeItem(selectedItemId);
+  }, [selectedItemId, removeItem]);
+
+  // Cash drawer (mock)
+  const handleOpenDrawer = () => showToast('เปิดลิ้นชักเงิน... 🗄️');
+
+  // Payment
+  const handleOpenPay = () => {
+    if (items.length === 0) { showToast('ไม่มีรายการในบิล', 'err'); return; }
+    setModalPay(true);
+  };
+
+  const handleConfirmPay = async (cashReceived: number, method: 'cash' | 'transfer' | 'credit') => {
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/sales', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items,
+          memberId: member?.id || '',
+          discount,
+          paymentMethod: method,
+          cashReceived,
+          notes,
+          pointsUsed: 0,
+          parkedBillId: recalledBillId || undefined,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'Error');
+
+      if (recalledBillId) parkedStore.completeBill(recalledBillId);
+
+      showToast(`ขายสำเร็จ ${d.invoiceNo || billNo}`);
+      clearCart();
+      setBillNo(generateInvoiceNo());
+      setRecalledBillId(null);
+      setModalPay(false);
+      searchRef.current?.focus();
+    } catch (e) {
+      showToast('เกิดข้อผิดพลาด: ' + (e as Error).message, 'err');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'F2') { e.preventDefault(); handleOpenMemberSearch(); }
+      else if (e.key === 'F4') { e.preventDefault(); handleParkBill(); }
+      else if (e.key === 'F5') { e.preventDefault(); handleOpenParked(); }
+      else if (e.key === 'F8') { e.preventDefault(); handleDeleteSelected(); }
+      else if (e.key === 'F9') { e.preventDefault(); handleOpenDrawer(); }
+      else if (e.key === 'F11') { e.preventDefault(); setModalEdit(true); }
+      else if (e.key === 'F12') { e.preventDefault(); handleOpenPay(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleOpenMemberSearch, handleParkBill, handleOpenParked, handleDeleteSelected]);
+
+  const activeParked = useMemo(
+    () => parkedStore.bills.filter((b) => b.status === 'parked' || b.status === 'recalled').length,
+    [parkedStore.bills]
+  );
+
+  const handleLogout = () => {
+    logout();
+    router.replace('/login');
+  };
+
+  const total = subtotal();
+  const final = finalAmount();
+  const itemCount = items.reduce((s, i) => s + i.quantity, 0);
 
   return (
-    <div className="flex h-screen">
-      {/* LEFT: Product Search */}
-      <div className="flex-1 flex flex-col bg-gray-50 border-r border-gray-200">
-        <div className="p-4 bg-white border-b border-gray-200">
-          <div className="relative">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <Input
-              ref={searchRef}
-              autoFocus
-              value={productSearch}
-              onChange={(e) => setProductSearch(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              className="pl-9 h-11 text-base"
-              placeholder="ค้นหาชื่อยา, บาร์โค้ด... (กด Enter เพื่อเพิ่ม)"
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4">
-          {productSearch.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400">
-              <Search size={48} strokeWidth={1} />
-              <p className="mt-3 text-sm">ค้นหาสินค้าด้านบน</p>
+    <div className="fixed inset-0 flex flex-col bg-gray-100" style={{ marginLeft: 0 }}>
+      {/* HEADER - Dark Blue */}
+      <header className="bg-gradient-to-r from-blue-950 via-blue-900 to-blue-950 text-white px-5 py-2.5 flex items-center justify-between shadow-lg">
+        <div className="flex items-center gap-6">
+          <Link href="/dashboard" className="flex items-center gap-2 hover:opacity-80">
+            <div className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center text-lg">💊</div>
+            <div>
+              <div className="font-bold text-base leading-tight">เจริญทองเภสัช</div>
+              <div className="text-[10px] opacity-70 leading-tight">Pharmacy POS v1.20</div>
             </div>
-          ) : loadingProducts ? (
-            <div className="space-y-2">
-              {[...Array(4)].map((_, i) => <div key={i} className="h-16 bg-gray-200 rounded animate-pulse" />)}
-            </div>
-          ) : products.length === 0 ? (
-            <p className="text-center text-gray-400 mt-8 text-sm">ไม่พบสินค้า</p>
-          ) : (
-            <div className="grid grid-cols-1 gap-2">
-              {products.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => handleAddProduct(p)}
-                  disabled={p.stock <= 0}
-                  className="flex items-center gap-3 p-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
-                      {p.requirePrescription && <Badge variant="warning" className="text-xs shrink-0">ต้องใบสั่งยา</Badge>}
-                    </div>
-                    <p className="text-xs text-gray-500 truncate">{p.genericName} · {p.barcode}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-sm font-bold text-blue-600">{formatCurrency(p.price)}</p>
-                    <p className={`text-xs ${p.stock <= p.minStock ? 'text-red-500' : 'text-gray-400'}`}>
-                      {p.stock <= 0 ? 'หมด' : `เหลือ ${p.stock} ${p.unit}`}
-                    </p>
-                  </div>
-                  <ChevronRight size={16} className="text-gray-300" />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+          </Link>
 
-      {/* RIGHT: Cart */}
-      <div className="w-96 flex flex-col bg-white">
-        {/* Member Bar */}
-        <div className="p-3 border-b border-gray-100 bg-gray-50">
-          {member ? (
-            <div className="flex items-center gap-2">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <User size={14} className="text-blue-600 shrink-0" />
-                  <p className="text-sm font-medium truncate">{member.name}</p>
-                  <Badge variant="default" className="text-xs shrink-0">{member.points} แต้ม</Badge>
-                </div>
-                <p className="text-xs text-gray-500 ml-5">{member.phone} · #{member.code}</p>
-              </div>
-              <button onClick={() => setMember(null)} className="p-1 hover:bg-gray-200 rounded text-gray-400">
-                <X size={14} />
-              </button>
-            </div>
-          ) : (
-            <button onClick={() => setShowMemberModal(true)} className="w-full flex items-center gap-2 text-sm text-gray-500 hover:text-blue-600 transition-colors">
-              <User size={14} />
-              <span>+ เพิ่มสมาชิก</span>
-            </button>
-          )}
-        </div>
+          <div className="h-10 w-px bg-white/20" />
 
-        {/* Cart Items */}
-        <div className="flex-1 overflow-y-auto">
-          {items.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-300">
-              <ShoppingCart size={40} strokeWidth={1} />
-              <p className="mt-2 text-sm">ยังไม่มีสินค้า</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-50">
-              {items.map((item) => (
-                <div key={item.productId} className="p-3">
-                  <div className="flex items-start gap-2 mb-2">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 leading-tight">{item.productName}</p>
-                      <p className="text-xs text-gray-500">{formatCurrency(item.price)} / ชิ้น</p>
-                    </div>
-                    <button onClick={() => removeItem(item.productId)} className="p-1 hover:bg-red-50 rounded text-gray-300 hover:text-red-500 transition-colors">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => updateQuantity(item.productId, item.quantity - 1)} className="w-7 h-7 flex items-center justify-center rounded border border-gray-300 hover:bg-gray-100 transition-colors">
-                        <Minus size={12} />
-                      </button>
-                      <input
-                        type="number"
-                        value={item.quantity}
-                        onChange={(e) => updateQuantity(item.productId, parseInt(e.target.value) || 0)}
-                        className="w-12 text-center text-sm border border-gray-300 rounded h-7 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        min={1}
-                        max={item.stock}
-                      />
-                      <button onClick={() => updateQuantity(item.productId, item.quantity + 1)} disabled={item.quantity >= item.stock} className="w-7 h-7 flex items-center justify-center rounded border border-gray-300 hover:bg-gray-100 transition-colors disabled:opacity-40">
-                        <Plus size={12} />
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs text-gray-400">ส่วนลด</span>
-                        <input
-                          type="number"
-                          value={item.discount}
-                          onChange={(e) => updateItemDiscount(item.productId, parseFloat(e.target.value) || 0)}
-                          className="w-14 text-center text-xs border border-gray-300 rounded h-6 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          min={0}
-                          max={100}
-                          placeholder="%"
-                        />
-                        <span className="text-xs text-gray-400">%</span>
-                      </div>
-                      <p className="text-sm font-semibold text-gray-900 w-20 text-right">{formatCurrency(item.totalPrice)}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Summary */}
-        <div className="border-t border-gray-200 p-4 space-y-3">
-          <div className="flex justify-between text-sm text-gray-600">
-            <span>ยอดรวม</span>
-            <span className="font-medium">{formatCurrency(subtotal())}</span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-gray-600">ส่วนลดรวม (฿)</span>
-            <div className="flex items-center gap-1">
-              <Input
-                type="number"
-                value={discount || ''}
-                onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                className="w-24 h-7 text-right text-sm"
-                placeholder="0"
-                min={0}
-              />
-            </div>
-          </div>
-          <div className="flex justify-between text-lg font-bold border-t border-gray-200 pt-3">
-            <span>ยอดสุทธิ</span>
-            <span className="text-blue-600">{formatCurrency(finalAmount())}</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="outline" onClick={clearCart} disabled={items.length === 0}>
-              <Trash2 size={15} className="mr-1.5" /> ล้าง
-            </Button>
-            <Button size="default" onClick={handleCheckout} disabled={items.length === 0} className="bg-green-600 hover:bg-green-700">
-              <CreditCard size={15} className="mr-1.5" /> ชำระเงิน
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      {/* Member Search Modal */}
-      <Modal open={showMemberModal} onClose={() => setShowMemberModal(false)} title="เลือกสมาชิก" size="md">
-        <div className="p-4 space-y-3">
-          <div className="relative">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <Input
-              autoFocus
-              value={memberSearch}
-              onChange={(e) => setMemberSearch(e.target.value)}
-              className="pl-9"
-              placeholder="ค้นหาชื่อ, เบอร์โทร, รหัสสมาชิก..."
-            />
-          </div>
-          <div className="space-y-2 max-h-72 overflow-y-auto">
-            {memberSearch.length === 0 ? (
-              <p className="text-center text-sm text-gray-400 py-4">กรอกข้อมูลเพื่อค้นหา</p>
-            ) : members.length === 0 ? (
-              <p className="text-center text-sm text-gray-400 py-4">ไม่พบสมาชิก</p>
-            ) : (
-              members.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => { setMember(m); setShowMemberModal(false); setMemberSearch(''); }}
-                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-all text-left"
-                >
-                  <div className="w-9 h-9 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-medium text-sm shrink-0">
-                    {m.name.charAt(0)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">{m.name}</p>
-                    <p className="text-xs text-gray-500">{m.phone} · #{m.code}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <Badge variant="default">{m.points} แต้ม</Badge>
-                    <p className="text-xs text-gray-400 mt-0.5">ยอดซื้อ {formatCurrency(m.totalSpent)}</p>
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      </Modal>
-
-      {/* Payment Modal */}
-      <Modal open={showPayModal} onClose={() => setShowPayModal(false)} title="ชำระเงิน" size="sm">
-        <div className="p-5 space-y-4">
-          <div className="bg-blue-50 rounded-lg p-4 text-center">
-            <p className="text-sm text-gray-500">ยอดที่ต้องชำระ</p>
-            <p className="text-3xl font-bold text-blue-700 mt-1">{formatCurrency(finalAmount())}</p>
-            {member && <p className="text-xs text-gray-500 mt-1">สมาชิก: {member.name}</p>}
-          </div>
-
-          <div>
-            <p className="text-sm font-medium text-gray-700 mb-2">วิธีชำระเงิน</p>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { value: 'cash', label: 'เงินสด', icon: <Banknote size={18} /> },
-                { value: 'transfer', label: 'โอนเงิน', icon: <Smartphone size={18} /> },
-                { value: 'credit', label: 'บัตรเครดิต', icon: <CreditCard size={18} /> },
-              ].map((m) => (
-                <button
-                  key={m.value}
-                  onClick={() => setPayMethod(m.value as typeof payMethod)}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-lg border-2 transition-all ${payMethod === m.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 hover:border-gray-300'}`}
-                >
-                  {m.icon}
-                  <span className="text-xs font-medium">{m.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {payMethod === 'cash' && (
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-gray-700">รับเงิน</p>
-              <Input
-                type="number"
-                autoFocus
-                value={cashInput}
-                onChange={(e) => setCashInput(e.target.value)}
-                className="text-right text-xl h-12 font-bold"
-                placeholder="0.00"
-              />
-              <div className="flex flex-wrap gap-2">
-                {quickAmounts.map((a) => (
-                  <button key={a} onClick={() => setCashInput(String(a))} className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded transition-colors">
-                    {a}
-                  </button>
-                ))}
-              </div>
-              {cashInput && cashRecv >= finalAmount() && (
-                <div className="bg-green-50 rounded-lg p-3 flex justify-between items-center">
-                  <span className="text-sm text-gray-600">เงินทอน</span>
-                  <span className="text-xl font-bold text-green-600">{formatCurrency(change)}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          <Button
-            className="w-full"
-            size="lg"
-            onClick={handleConfirmPay}
-            disabled={createSale.isPending || (payMethod === 'cash' && cashRecv < finalAmount())}
-          >
-            {createSale.isPending ? 'กำลังบันทึก...' : 'ยืนยันการชำระเงิน'}
-          </Button>
-        </div>
-      </Modal>
-
-      {/* Receipt Modal */}
-      {receiptData && (
-        <Modal open={!!receiptData} onClose={() => setReceiptData(null)} title="บิลเสร็จสิ้น" size="sm">
-          <div className="p-6 text-center space-y-4">
-            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-              <Receipt size={28} className="text-green-600" />
+          <div className="flex gap-4 text-xs">
+            <div>
+              <div className="opacity-60 text-[10px] uppercase">เลขที่บิล</div>
+              <div className="font-mono font-bold text-base text-yellow-300">{billNo}</div>
             </div>
             <div>
-              <p className="text-lg font-semibold text-gray-900">ขายสำเร็จ!</p>
-              <p className="text-sm text-gray-500 mt-1">เลขบิล: {receiptData.invoiceNo}</p>
+              <div className="opacity-60 text-[10px] uppercase">วันที่/เวลา</div>
+              <div className="font-mono text-sm">{now.toLocaleString('th-TH')}</div>
             </div>
-            <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">ยอดสุทธิ</span>
-                <span className="font-bold">{formatCurrency(receiptData.finalAmount)}</span>
+            <div>
+              <div className="opacity-60 text-[10px] uppercase">สถานะ</div>
+              <div className="text-sm font-semibold text-green-300">
+                {recalledBillId ? '● เรียกคืนบิลค้าง' : '● กำลังขาย'}
               </div>
-              {receiptData.change > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">เงินทอน</span>
-                  <span className="font-bold text-green-600">{formatCurrency(receiptData.change)}</span>
-                </div>
-              )}
-              {receiptData.memberName && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">สมาชิก</span>
-                  <span>{receiptData.memberName}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 text-xs">
+          <span className="opacity-80">ผู้ใช้: <span className="font-semibold">{username || '—'}</span></span>
+          <button
+            onClick={handleLogout}
+            className="px-3 py-1.5 bg-red-600/80 hover:bg-red-600 rounded font-semibold"
+          >
+            ออกจากระบบ
+          </button>
+        </div>
+      </header>
+
+      {/* MAIN BODY */}
+      <div className="flex-1 flex overflow-hidden">
+
+        {/* LEFT PANEL */}
+        <aside className="w-[380px] bg-white border-r border-gray-300 flex flex-col">
+
+          {/* Customer Info (readonly) */}
+          <section className="p-3 border-b border-gray-200 bg-gradient-to-b from-slate-50 to-white">
+            <h3 className="text-xs font-bold text-blue-900 mb-2 flex items-center gap-1">
+              👤 ข้อมูลลูกค้า
+            </h3>
+            <div className="space-y-1.5 text-xs">
+              <ReadonlyField label="รหัส" value={member?.code || ''} />
+              <ReadonlyField label="ชื่อ" value={member?.name || ''} />
+              <ReadonlyField label="โทร" value={member?.phone || ''} />
+              <ReadonlyField label="ที่อยู่" value={member?.address || ''} multiline />
+              {member && (
+                <div className="flex justify-between text-[11px] text-gray-500 pt-1">
+                  <span>คะแนนสะสม: <b className="text-blue-700">{member.points}</b></span>
+                  <span>ยอดซื้อรวม: {formatCurrency(member.totalSpent)}</span>
                 </div>
               )}
             </div>
-            <Button className="w-full" onClick={() => { setReceiptData(null); searchRef.current?.focus(); }}>
-              ขายต่อ
-            </Button>
+          </section>
+
+          {/* Medical Info (readonly) */}
+          <section className="p-3 border-b border-gray-200 bg-red-50/30">
+            <h3 className="text-xs font-bold text-red-900 mb-2 flex items-center gap-1">
+              ⚕️ ข้อมูลทางการแพทย์
+            </h3>
+            <div className="space-y-1.5 text-xs">
+              <ReadonlyField label="โรคประจำตัว" value={member?.chronicDisease || ''} />
+              <ReadonlyField label="แพ้ยา" value={member?.drugAllergy || ''} danger />
+              <ReadonlyField label="หมายเหตุ" value={member?.notes || ''} />
+            </div>
+          </section>
+
+          {/* Action Buttons */}
+          <section className="p-2 bg-gray-50 border-b border-gray-200 grid grid-cols-3 gap-1.5">
+            <ActionBtn label="F2 ค้นหา" color="blue" onClick={handleOpenMemberSearch} />
+            <ActionBtn label="แก้ไข" color="teal" onClick={() => setModalEdit(true)} />
+            <ActionBtn label="F4 พักบิล" color="yellow" onClick={handleParkBill} disabled={items.length === 0} />
+            <ActionBtn label={`F5 บิลค้าง${activeParked > 0 ? ` (${activeParked})` : ''}`} color="purple" onClick={handleOpenParked} badge={activeParked > 0} />
+            <ActionBtn label="F9 เปิดลิ้นชัก" color="gray" onClick={handleOpenDrawer} />
+            <ActionBtn label="F8 ลบรายการ" color="red" onClick={handleDeleteSelected} disabled={!selectedItemId} />
+          </section>
+
+          {/* Sale Details */}
+          <section className="flex-1 flex flex-col overflow-hidden">
+            <div className="px-3 py-1.5 bg-blue-900 text-white text-xs font-semibold flex items-center justify-between">
+              <span>รายละเอียดการขาย</span>
+              <span className="opacity-75">{itemCount} ชิ้น / {items.length} รายการ</span>
+            </div>
+            <div className="flex-1 overflow-auto">
+              {items.length === 0 ? (
+                <div className="p-6 text-center text-gray-400 text-xs">
+                  ยังไม่มีรายการ<br />
+                  ค้นหาสินค้าทางด้านขวา →
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-100">
+                    <tr className="text-left">
+                      <th className="px-2 py-1 font-semibold">สินค้า</th>
+                      <th className="px-2 py-1 font-semibold text-center w-12">จน</th>
+                      <th className="px-2 py-1 font-semibold text-right w-16">ราคา</th>
+                      <th className="px-2 py-1 font-semibold text-right w-16">รวม</th>
+                      <th className="w-6" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it) => {
+                      const selected = selectedItemId === it.productId;
+                      return (
+                        <tr
+                          key={it.productId}
+                          onClick={() => setSelectedItemId(it.productId)}
+                          className={`border-b border-gray-100 cursor-pointer ${selected ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
+                        >
+                          <td className="px-2 py-1.5">
+                            <div className="truncate max-w-[140px] font-medium">{it.productName}</div>
+                            {it.requirePrescription && <div className="text-[9px] text-orange-600">⚠ ใบสั่งยา</div>}
+                          </td>
+                          <td className="px-1 py-1.5 text-center">
+                            <input
+                              type="number"
+                              value={it.quantity}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => updateQuantity(it.productId, parseInt(e.target.value) || 0)}
+                              className="w-10 px-1 py-0.5 border border-gray-300 rounded text-center text-xs"
+                              min={1}
+                              max={it.stock}
+                            />
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono">{it.price.toFixed(2)}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-semibold">{it.totalPrice.toFixed(2)}</td>
+                          <td className="px-1 py-1.5 text-center">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); removeItem(it.productId); }}
+                              className="text-red-500 hover:bg-red-100 w-5 h-5 rounded text-xs"
+                            >×</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
+        </aside>
+
+        {/* RIGHT PANEL */}
+        <section className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+
+          {/* Status bar */}
+          <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center justify-between text-xs">
+            <div className="flex gap-5 text-gray-600">
+              <span>⌨️ <b>F2</b> ค้นหาสมาชิก</span>
+              <span><b>F4</b> พักบิล</span>
+              <span><b>F5</b> บิลค้าง</span>
+              <span><b>F8</b> ลบ</span>
+              <span><b>F9</b> ลิ้นชัก</span>
+              <span><b>F11</b> แก้ไขลูกค้า</span>
+              <span><b>F12</b> ชำระเงิน</span>
+            </div>
           </div>
-        </Modal>
+
+          {/* 5-column Amount Display - black bg */}
+          <div className="bg-black text-white grid grid-cols-5 divide-x divide-gray-700">
+            <AmountCell label="รายการ" value={String(items.length)} color="text-cyan-300" />
+            <AmountCell label="จำนวนชิ้น" value={String(itemCount)} color="text-blue-300" />
+            <AmountCell label="รวม (฿)" value={total.toFixed(2)} color="text-white" />
+            <AmountCell label="ส่วนลด (฿)" value={discount.toFixed(2)} color="text-orange-300" editable onChange={(v) => setDiscount(v)} />
+            <AmountCell label="ยอดสุทธิ (฿)" value={final.toFixed(2)} color="text-green-300" large />
+          </div>
+
+          {/* Barcode search */}
+          <div className="px-4 py-2.5 bg-white border-b border-gray-200 flex gap-2 items-center">
+            <span className="text-xs font-semibold text-gray-600 whitespace-nowrap">🔍 Barcode / ชื่อสินค้า:</span>
+            <input
+              ref={searchRef}
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="สแกนบาร์โค้ด หรือพิมพ์ค้นหา... (Enter = เพิ่ม)"
+              className="flex-1 px-3 py-2 border-2 border-blue-500 rounded text-sm font-mono focus:outline-none focus:border-blue-700"
+            />
+          </div>
+
+          {/* Product table - green header */}
+          <div className="flex-1 overflow-auto bg-white">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-green-600 text-white shadow">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold w-24">บาร์โค้ด</th>
+                  <th className="px-3 py-2 text-left font-semibold">ชื่อสินค้า</th>
+                  <th className="px-3 py-2 text-left font-semibold w-32">ชื่อสามัญ</th>
+                  <th className="px-3 py-2 text-center font-semibold w-20">คงเหลือ</th>
+                  <th className="px-3 py-2 text-right font-semibold w-24">ราคาขาย</th>
+                  <th className="px-3 py-2 text-center font-semibold w-20">เพิ่ม</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingSearch ? (
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">กำลังค้นหา...</td></tr>
+                ) : products.length === 0 ? (
+                  <tr><td colSpan={6} className="px-4 py-12 text-center text-gray-400">
+                    {searchQuery ? 'ไม่พบสินค้า' : 'สแกนบาร์โค้ด หรือพิมพ์ชื่อสินค้าเพื่อค้นหา'}
+                  </td></tr>
+                ) : products.map((p) => {
+                  const outOfStock = Number(p.stock) <= 0;
+                  return (
+                    <tr
+                      key={p.id}
+                      onDoubleClick={() => !outOfStock && handleAddProduct(p)}
+                      className={`border-b border-gray-100 ${outOfStock ? 'opacity-50 bg-red-50' : 'hover:bg-blue-50 cursor-pointer'}`}
+                    >
+                      <td className="px-3 py-2 font-mono text-xs">{p.barcode || '—'}</td>
+                      <td className="px-3 py-2 font-medium">
+                        {p.name}
+                        {String(p.requirePrescription) === 'true' && <span className="ml-2 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[10px] rounded">ใบสั่งยา</span>}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500 text-xs">{p.genericName}</td>
+                      <td className={`px-3 py-2 text-center font-mono ${Number(p.stock) <= Number(p.minStock) ? 'text-red-600 font-bold' : ''}`}>
+                        {p.stock} {p.unit}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-blue-700">{Number(p.price).toFixed(2)}</td>
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          disabled={outOfStock}
+                          onClick={() => handleAddProduct(p)}
+                          className="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-xs font-bold rounded"
+                        >+ เพิ่ม</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Payment button — shown only when items ≥ 1 */}
+          {items.length > 0 && (
+            <div className="p-3 bg-white border-t-2 border-gray-300">
+              <button
+                onClick={handleOpenPay}
+                className="w-full py-4 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white rounded-lg text-xl font-bold shadow-lg flex items-center justify-center gap-3"
+              >
+                <span>ชำระเงิน</span>
+                <span className="text-3xl">{formatCurrency(final)}</span>
+                <span>▶</span>
+              </button>
+            </div>
+          )}
+
+        </section>
+      </div>
+
+      {/* MODALS */}
+      <MemberSearchModal
+        open={modalMember}
+        onClose={() => setModalMember(false)}
+        onSelect={(m) => setMember(m)}
+      />
+      <EditMemberModal
+        open={modalEdit}
+        member={member}
+        onClose={() => setModalEdit(false)}
+        onSaved={(m) => setMember(m)}
+      />
+      <ParkedBillsModal
+        open={modalParked}
+        onClose={() => setModalParked(false)}
+        onRecall={handleRecall}
+      />
+      <PaymentModal
+        open={modalPay}
+        finalAmount={final}
+        memberName={member?.name}
+        onClose={() => setModalPay(false)}
+        onConfirm={handleConfirmPay}
+        isSubmitting={submitting}
+      />
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-20 right-6 z-[100] px-5 py-3 rounded-lg shadow-lg text-white font-semibold text-sm animate-pulse ${
+          toast.type === 'err' ? 'bg-red-600' : 'bg-green-600'
+        }`}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReadonlyField({ label, value, multiline, danger }: { label: string; value: string; multiline?: boolean; danger?: boolean }) {
+  return (
+    <div className="flex gap-2">
+      <div className="w-16 text-[10px] font-semibold text-gray-500 shrink-0 pt-0.5">{label}</div>
+      <div className={`flex-1 px-2 py-1 bg-gray-100 border border-gray-200 rounded text-xs ${multiline ? 'min-h-[1.5em]' : 'truncate'} ${danger && value ? 'text-red-700 font-semibold bg-red-50 border-red-200' : 'text-gray-800'}`}>
+        {value || <span className="text-gray-400">—</span>}
+      </div>
+    </div>
+  );
+}
+
+function ActionBtn({ label, color, onClick, disabled, badge }: { label: string; color: string; onClick: () => void; disabled?: boolean; badge?: boolean }) {
+  const cls: Record<string, string> = {
+    blue: 'bg-blue-600 hover:bg-blue-700 text-white',
+    teal: 'bg-teal-600 hover:bg-teal-700 text-white',
+    yellow: 'bg-yellow-500 hover:bg-yellow-600 text-white',
+    purple: 'bg-purple-600 hover:bg-purple-700 text-white',
+    red: 'bg-red-500 hover:bg-red-600 text-white',
+    gray: 'bg-gray-600 hover:bg-gray-700 text-white',
+  };
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`relative py-2 px-2 rounded text-[11px] font-bold transition-colors disabled:bg-gray-300 disabled:text-gray-500 ${cls[color]}`}
+    >
+      {label}
+      {badge && <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-ping" />}
+    </button>
+  );
+}
+
+function AmountCell({ label, value, color, editable, onChange, large }: { label: string; value: string; color: string; editable?: boolean; onChange?: (v: number) => void; large?: boolean }) {
+  return (
+    <div className="p-2.5 text-center">
+      <div className="text-[10px] uppercase tracking-wider opacity-60">{label}</div>
+      {editable ? (
+        <input
+          type="number"
+          value={value === '0.00' ? '' : value}
+          placeholder="0.00"
+          onChange={(e) => onChange?.(parseFloat(e.target.value) || 0)}
+          className={`w-full bg-transparent text-center font-mono font-bold ${large ? 'text-3xl' : 'text-2xl'} ${color} focus:outline-none mt-0.5`}
+          min={0}
+        />
+      ) : (
+        <div className={`font-mono font-bold ${large ? 'text-3xl' : 'text-2xl'} ${color} mt-0.5`}>{value}</div>
       )}
     </div>
   );

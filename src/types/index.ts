@@ -33,6 +33,8 @@ export interface Member {
   joinDate: string;
   status: 'active' | 'inactive';
   notes: string;
+  chronicDisease: string;
+  drugAllergy: string;
   createdAt: string;
 }
 
