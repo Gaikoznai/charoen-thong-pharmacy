@@ -41,7 +41,13 @@ const Icon = ({ d, size = 28, color = 'currentColor' }: { d: string; size?: numb
 
 const ICONS: Record<string, React.ReactNode> = {
   สินค้า:           <Icon d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4zM3 6h18M16 10a4 4 0 01-8 0" />,
-  ขายปลีก:         <Icon d="M6 2H3l-2 6v1a2 2 0 004 0 2 2 0 004 0 2 2 0 004 0 2 2 0 004 0V8L17 2h-3M6 2v7M11 2v7M16 2v7M9 22v-6h6v6" />,
+  ขายปลีก: (
+    <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="9" cy="21" r="1" fill="currentColor"/>
+      <circle cx="20" cy="21" r="1" fill="currentColor"/>
+      <path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/>
+    </svg>
+  ),
   ขายส่ง:          <Icon d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2zM22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" />,
   ส่งสินค้าสาขา:   <Icon d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2zM9 22V12h6v10" />,
   'รับ-ส่ง สาขา':  <Icon d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 01-4 4H3" />,
