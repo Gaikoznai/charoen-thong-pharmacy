@@ -1,4 +1,4 @@
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbzzwLt5w9y8c41CTYEoBshl0HRJHT9srPxnV5FQLUJs5lgEU6UW1A0k_CP4QZwPNSpK/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyJwEujUeigNQjp0SbZnZebHR5Js6zgZCHWzwgEHRe0jDk1Eq6qWoAilMLskquvXZqE/exec';
 
 interface GasResponse<T = unknown> {
   ok: boolean;
