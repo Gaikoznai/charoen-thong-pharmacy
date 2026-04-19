@@ -43,9 +43,9 @@ const ICONS: Record<string, React.ReactNode> = {
   สินค้า:           <Icon d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4zM3 6h18M16 10a4 4 0 01-8 0" />,
   ขายปลีก: (
     <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="9" cy="21" r="1" fill="currentColor"/>
-      <circle cx="20" cy="21" r="1" fill="currentColor"/>
-      <path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/>
+      <circle cx="9" cy="21" r="1" fill="currentColor" stroke="none"/>
+      <circle cx="20" cy="21" r="1" fill="currentColor" stroke="none"/>
+      <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
     </svg>
   ),
   ขายส่ง:          <Icon d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2zM22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" />,
