@@ -36,63 +36,141 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-blue-950 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-white/10 mb-4">
-            <span className="text-3xl">💊</span>
-          </div>
-          <h1 className="text-2xl font-bold text-white tracking-wide">เจริญทองเภสัช</h1>
-          <p className="text-blue-300 text-sm mt-1">ระบบบริหารร้านยา</p>
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(150deg,#d6eaff 0%,#eaf4ff 45%,#f2f8ff 70%,#d0e8ff 100%)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '16px',
+    }}>
+      {/* Side-by-side layout: logo left, form right */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '60px' }}>
+
+        {/* Left: Logo */}
+        <div style={{ textAlign: 'center', flexShrink: 0 }}>
+          <div style={{ fontSize: '72px', lineHeight: 1, marginBottom: '12px' }}>💊</div>
+          <h1 style={{
+            fontSize: '22px',
+            fontWeight: 700,
+            color: '#2a5080',
+            margin: 0,
+            letterSpacing: '1px',
+          }}>เจริญทองเภสัช</h1>
+          <p style={{ color: '#5588aa', fontSize: '13px', marginTop: '4px' }}>ระบบบริหารร้านยา</p>
         </div>
 
-        {/* Login Card */}
-        <div className="bg-white rounded-2xl shadow-2xl p-8">
-          <h2 className="text-lg font-semibold text-gray-800 mb-6 text-center">เข้าสู่ระบบ</h2>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ชื่อผู้ใช้</label>
+        {/* Right: Form */}
+        <div style={{
+          background: '#fff',
+          borderRadius: '10px',
+          boxShadow: '0 4px 24px rgba(40,100,180,0.13)',
+          padding: '32px 36px',
+          minWidth: '300px',
+        }}>
+          <h2 style={{
+            fontSize: '16px',
+            fontWeight: 600,
+            color: '#2a5080',
+            marginBottom: '20px',
+            textAlign: 'center',
+          }}>เข้าสู่ระบบ</h2>
+
+          <form onSubmit={handleLogin}>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '12px', color: '#555', marginBottom: '4px' }}>
+                ชื่อผู้ใช้
+              </label>
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="admin"
                 autoFocus
                 autoComplete="username"
+                placeholder="admin"
+                style={{
+                  width: '100%',
+                  padding: '7px 10px',
+                  border: '1px solid #b8cfe8',
+                  borderRadius: '5px',
+                  fontSize: '13px',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                }}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">รหัสผ่าน</label>
+
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '12px', color: '#555', marginBottom: '4px' }}>
+                รหัสผ่าน
+              </label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="••••"
                 autoComplete="current-password"
+                style={{
+                  width: '100%',
+                  padding: '7px 10px',
+                  border: '1px solid #b8cfe8',
+                  borderRadius: '5px',
+                  fontSize: '13px',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                }}
               />
             </div>
+
             {error && (
-              <p className="text-red-500 text-sm text-center">{error}</p>
+              <p style={{ color: '#cc2020', fontSize: '12px', textAlign: 'center', marginBottom: '8px' }}>
+                {error}
+              </p>
             )}
+
             <button
               type="submit"
               disabled={loading || !username || !password}
-              className="w-full py-3 bg-blue-700 hover:bg-blue-800 disabled:bg-blue-300 text-white font-semibold rounded-lg transition-colors text-sm"
+              style={{
+                width: '100%',
+                padding: '9px',
+                background: loading || !username || !password ? '#a0cce0' : '#2dadd4',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '5px',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: loading || !username || !password ? 'not-allowed' : 'pointer',
+                marginBottom: '10px',
+              }}
             >
               {loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
             </button>
           </form>
-          <p className="text-center text-xs text-gray-400 mt-5">เจริญทองเภสัช POS v1.20</p>
+
+          <p style={{ textAlign: 'center', fontSize: '11px', color: '#888', margin: 0 }}>
+            ผู้ใช้ : admin | รหัสผ่าน : 1234
+          </p>
         </div>
       </div>
 
-      {/* DEV skip button */}
+      {/* DEV button — dark, bottom-left */}
       <button
         onClick={handleDev}
-        className="fixed bottom-4 left-4 px-3 py-1.5 bg-yellow-500/80 hover:bg-yellow-500 text-black text-xs font-bold rounded-lg shadow transition-colors z-50"
+        style={{
+          position: 'fixed',
+          bottom: '12px',
+          left: '12px',
+          padding: '6px 12px',
+          background: '#222',
+          color: '#eee',
+          border: 'none',
+          borderRadius: '5px',
+          fontSize: '11px',
+          fontWeight: 700,
+          cursor: 'pointer',
+          zIndex: 50,
+        }}
       >
         [DEV] ข้ามเข้าระบบ
       </button>
